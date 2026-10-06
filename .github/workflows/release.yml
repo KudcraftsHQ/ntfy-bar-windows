@@ -7,6 +7,9 @@ on:
 permissions:
   contents: write
 
+env:
+  VPK_VERSION: 1.2.161
+
 jobs:
   release:
     runs-on: windows-latest
@@ -23,14 +26,39 @@ jobs:
         run: |
           $tag = "${{ github.ref_name }}"
           $version = $tag.TrimStart('v')
-          if ($version -notmatch '^\d+\.\d+\.\d+') { throw "Tag $tag is not vX.Y.Z" }
+          if ($version -notmatch '^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$') { throw "Tag $tag is not vX.Y.Z[-pre]" }
           "tag=$tag" >> $env:GITHUB_OUTPUT
           "version=$version" >> $env:GITHUB_OUTPUT
+          # v1.2.0-rc.1 is a prerelease: never "latest", never offered to installed copies.
+          "pre=$(if ($version -match '-') { 'true' } else { 'false' })" >> $env:GITHUB_OUTPUT
 
       - name: Test
         run: dotnet test tests/NtfyBar.Core.Tests -c Release
 
-      - name: Publish
+      - name: Install vpk
+        run: dotnet tool install -g vpk --version ${{ env.VPK_VERSION }}
+
+      - name: Publish (folder, for Velopack)
+        run: dotnet publish src/NtfyBar.Win -c Release -r win-x64 --self-contained -p:PublishSingleFile=false -p:Version=${{ steps.v.outputs.version }} -o publish-vpk
+
+      - name: Download the previous release (for delta packages)
+        shell: pwsh
+        run: |
+          $pre = @(); if ('${{ steps.v.outputs.pre }}' -eq 'true') { $pre = @('--pre') }
+          vpk download github --repoUrl "https://github.com/${{ github.repository }}" --token "${{ github.token }}" --outputDir releases @pre
+          if ($LASTEXITCODE) { Write-Host "No previous Velopack release (first release?): full package only." }
+          exit 0
+
+      - name: vpk pack
+        shell: pwsh
+        run: |
+          vpk pack --packId ntfy-bar-windows --packVersion ${{ steps.v.outputs.version }} --packDir publish-vpk `
+            --mainExe ntfy-bar-windows.exe --runtime win-x64 --packTitle ntfy-bar --packAuthors Kudcrafts `
+            --icon src/NtfyBar.Win/Assets/app.ico --shortcuts StartMenuRoot --outputDir releases
+          if ($LASTEXITCODE) { throw "vpk pack failed" }
+          Get-ChildItem releases | Format-Table Name, Length
+
+      - name: Publish portable single-file exe
         run: dotnet publish src/NtfyBar.Win -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -p:Version=${{ steps.v.outputs.version }} -o publish
 
       - name: Smoke run (--selftest)
@@ -40,24 +68,32 @@ jobs:
           Get-Content selftest.txt
           if ($p.ExitCode -ne 0) { throw "selftest exited with $($p.ExitCode)" }
 
-      - name: Package
+      - name: vpk upload github
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force dist | Out-Null
-          $name = "ntfy-bar-windows-${{ steps.v.outputs.tag }}.exe"
-          Copy-Item publish\ntfy-bar-windows.exe "dist\$name"
-          $hash = (Get-FileHash "dist\$name" -Algorithm SHA256).Hash.ToLower()
-          "$hash  $name" | Out-File -Encoding ascii dist\SHA256SUMS
-          Get-Content dist\SHA256SUMS
+          $pre = @(); if ('${{ steps.v.outputs.pre }}' -eq 'true') { $pre = @('--pre') }
+          vpk upload github --repoUrl "https://github.com/${{ github.repository }}" --token "${{ github.token }}" `
+            --outputDir releases --tag "${{ steps.v.outputs.tag }}" --releaseName "ntfy-bar-windows ${{ steps.v.outputs.tag }}" `
+            --publish @pre
+          if ($LASTEXITCODE) { throw "vpk upload failed" }
 
-      - name: GitHub Release
+      - name: Attach the portable exe, checksums and notes
         env:
           GH_TOKEN: ${{ github.token }}
         shell: pwsh
         run: |
           $tag = "${{ steps.v.outputs.tag }}"
-          $extra = @()
-          if ($tag -match "-") { $extra += "--prerelease" }   # v1.2.0-rc.1 must not become "latest"
-          gh release create $tag (Get-ChildItem dist | ForEach-Object { $_.FullName }) @extra `
-            --title "ntfy-bar-windows $tag" `
-            --notes "Unsigned build: on first run Windows SmartScreen shows 'Windows protected your PC'. Click **More info → Run anyway**. Verify the download against SHA256SUMS."
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item publish\ntfy-bar-windows.exe "dist\ntfy-bar-windows-$tag.exe"
+          $files = @(Get-Item "dist\ntfy-bar-windows-$tag.exe") + @(Get-ChildItem releases -Filter "*Setup.exe") + @(Get-ChildItem releases -Filter "*Portable.zip")
+          ($files | ForEach-Object { "$((Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower())  $($_.Name)" }) | Out-File -Encoding ascii dist\SHA256SUMS
+          Get-Content dist\SHA256SUMS
+          gh release upload $tag "dist\ntfy-bar-windows-$tag.exe" dist\SHA256SUMS --clobber
+          $notes = @"
+          **Install:** download ``ntfy-bar-windows-win-Setup.exe`` and run it. It installs for your user only (no admin prompt), adds ntfy-bar to the Start menu, and then **updates itself**: new versions download in the background and install when ntfy-bar quits or next starts.
+
+          **Unsigned build:** Windows SmartScreen shows "Windows protected your PC" the first time you run the installer. Click **More info → Run anyway**. Updates installed by the app itself don't show this again.
+
+          Other downloads: ``ntfy-bar-windows-win-Portable.zip`` (no install, also self-updating) and ``ntfy-bar-windows-$tag.exe`` (one portable file, does **not** update itself). Verify downloads against ``SHA256SUMS``.
+          "@
+          gh release edit $tag --notes ($notes -replace '(?m)^ {10}', '')

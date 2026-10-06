@@ -92,4 +92,5 @@ public static class ToastArgs
     public const string Http = "http";
     public const string Update = "update";
     public const string SignIn = "signin";
+    public const string RestartToUpdate = "restart-update";
 }

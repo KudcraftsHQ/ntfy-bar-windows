@@ -9,6 +9,9 @@ on:
 permissions:
   contents: read
 
+env:
+  VPK_VERSION: 1.2.161
+
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
@@ -43,6 +46,76 @@ jobs:
           Get-Content selftest.txt
           Get-Content selftest.err.txt
           if ($p.ExitCode -ne 0) { throw "selftest exited with $($p.ExitCode)" }
+
+      - name: Install vpk
+        run: dotnet tool install -g vpk --version ${{ env.VPK_VERSION }}
+
+      - name: Velopack pack (two versions, no upload)
+        shell: pwsh
+        run: |
+          foreach ($v in @("0.0.1", "0.0.2")) {
+            dotnet publish src/NtfyBar.Win -c Release -r win-x64 --self-contained -p:PublishSingleFile=false -p:Version=$v -o "vpk/pub-$v"
+            if ($LASTEXITCODE) { throw "publish $v failed" }
+            vpk pack --packId ntfy-bar-windows --packVersion $v --packDir "vpk/pub-$v" --mainExe ntfy-bar-windows.exe `
+              --runtime win-x64 --packTitle ntfy-bar --packAuthors Kudcrafts --icon src/NtfyBar.Win/Assets/app.ico `
+              --shortcuts StartMenuRoot --outputDir vpk/releases
+            if ($LASTEXITCODE) { throw "vpk pack $v failed" }
+            if ($v -eq "0.0.1") { Copy-Item vpk/releases/ntfy-bar-windows-win-Setup.exe vpk/Setup-0.0.1.exe }
+          }
+          Get-ChildItem vpk/releases | Format-Table Name, Length
+
+      - name: End-to-end install + auto-update (0.0.1 -> 0.0.2)
+        shell: pwsh
+        run: |
+          $root = "$env:LOCALAPPDATA\ntfy-bar-windows"
+          $exe = "$root\current\ntfy-bar-windows.exe"
+          function Run-Exe($argList) {
+            $p = Start-Process -FilePath $exe -ArgumentList $argList -Wait -PassThru -NoNewWindow -RedirectStandardOutput out.txt
+            $o = Get-Content out.txt -Raw
+            Write-Host $o
+            if ($p.ExitCode -ne 0) { throw "$argList exited with $($p.ExitCode)" }
+            return $o.Trim()
+          }
+
+          # 1. Per-user silent install of the old version (no admin prompt).
+          Start-Process vpk/Setup-0.0.1.exe -ArgumentList '--silent' -Wait
+          for ($i = 0; $i -lt 30 -and -not (Test-Path $exe); $i++) { Start-Sleep 1 }
+          Start-Sleep 3
+          Get-Process ntfy-bar-windows -ErrorAction SilentlyContinue | Stop-Process -Force   # the installer starts the app
+          if (-not (Test-Path $exe)) { throw "not installed at $exe" }
+          $lnk = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\ntfy-bar.lnk"
+          if (-not (Test-Path $lnk)) { Get-ChildItem "$env:APPDATA\Microsoft\Windows\Start Menu\Programs" | Out-Host; throw "Start-menu shortcut missing" }
+          $v = Run-Exe '--version'
+          if ($v -ne '0.0.1') { throw "installed version is '$v'" }
+
+          # 2. The installed copy: toast + Velopack sees itself as installed.
+          Run-Exe '--selftest' | Out-Null
+
+          # 3. Launch at login set from the installed copy must survive the update.
+          New-ItemProperty -Path HKCU:\Software\Microsoft\Windows\CurrentVersion\Run -Name ntfy-bar -Value "`"$exe`" --autostart" -Force | Out-Null
+
+          # 4. Update from the local release folder (same code path as GitHub, other source).
+          Run-Exe @('--selftest', '--no-toast', '--update-from', (Resolve-Path vpk/releases).Path) | Out-Null
+          for ($i = 0; $i -lt 60; $i++) {
+            Start-Sleep 1
+            $p = Start-Process -FilePath $exe -ArgumentList '--version' -Wait -PassThru -NoNewWindow -RedirectStandardOutput out.txt -ErrorAction SilentlyContinue
+            if ((Get-Content out.txt -Raw -ErrorAction SilentlyContinue).Trim() -eq '0.0.2') { break }
+          }
+          $v = Run-Exe '--version'
+          if ($v -ne '0.0.2') { throw "after update the version is '$v'" }
+          $run = (Get-ItemProperty HKCU:\Software\Microsoft\Windows\CurrentVersion\Run).'ntfy-bar'
+          if (-not $run -or -not (Test-Path ($run -replace '^"([^"]+)".*$', '$1'))) { throw "launch-at-login entry broken: $run" }
+          if (-not (Test-Path $lnk)) { throw "Start-menu shortcut lost in update" }
+          Write-Host "updated 0.0.1 -> 0.0.2; shortcut and launch-at-login intact"
+
+      - name: Upload Velopack release preview
+        uses: actions/upload-artifact@v5
+        with:
+          name: velopack-releases-${{ github.sha }}
+          path: |
+            vpk/releases/*Setup.exe
+            vpk/releases/*-delta.nupkg
+            vpk/releases/releases.win.json
 
       - name: Upload exe
         uses: actions/upload-artifact@v5

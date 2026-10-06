@@ -23,25 +23,43 @@ It uses the same settings model as ntfy-bar, so a settings file works in both ap
   deleting it, or mute it to keep receiving messages silently.
 - **Credential Manager.** The password and access token are stored in Windows Credential Manager,
   never in the settings file.
-- **Launch at login**, update check against GitHub Releases, and first-run import from the ntfy CLI's
-  `client.yml`.
+- **Automatic updates** in the background (Velopack, delta packages), applied when the app quits or
+  restarts.
+- **Launch at login** and first-run import from the ntfy CLI's `client.yml`.
 
 ## Install
 
-1. Download `ntfy-bar-windows-vX.Y.Z.exe` from
-   [Releases](https://github.com/KudcraftsHQ/ntfy-bar-windows/releases). It's a single, self-contained
-   exe (about 80 MB); no .NET install is needed. Windows 10 1809 or later, x64.
-2. Put it somewhere permanent, for example `%LOCALAPPDATA%\Programs\ntfy-bar\`. Launch at login points
-   at this path.
-3. Run it. The build is **not code-signed yet**, so SmartScreen says "Windows protected your PC".
-   Click **More info → Run anyway**. You only need to do this once per version.
-4. Settings opens on first run. Click **Sign in…**, enter the server URL, your username and password.
+1. Download **`ntfy-bar-windows-win-Setup.exe`** from
+   [Releases](https://github.com/KudcraftsHQ/ntfy-bar-windows/releases) and run it. Windows 10 1809 or
+   later, x64. No .NET install is needed.
+2. The build is **not code-signed yet**, so SmartScreen says "Windows protected your PC". Click
+   **More info → Run anyway**. Your browser may also call the download "not commonly downloaded";
+   choose **Keep**.
+3. The installer is per-user: no admin prompt. It installs to `%LOCALAPPDATA%\ntfy-bar-windows`, adds
+   **ntfy-bar** to the Start menu and starts the app. Settings opens on first run: click **Sign in…**.
 
-You can check the download against `SHA256SUMS` on the release page:
-`Get-FileHash .\ntfy-bar-windows-vX.Y.Z.exe -Algorithm SHA256`.
+Uninstall from **Settings › Apps › Installed apps › ntfy-bar**. This removes the app, the Start-menu
+entry, launch at login and the saved credentials. Your settings and history stay in the folders listed
+under [Files](#files).
 
-To update, download the new exe, quit ntfy-bar from the tray menu, replace the file and start it again.
-The app checks for a new release once a day and shows a notification with a download button.
+### Updates
+
+Installed copies update themselves ([Velopack](https://velopack.io), GitHub Releases as the source):
+
+- ntfy-bar checks once a day, and when you click **Check for updates…** in the tray menu.
+- A new version downloads in the background. Usually that's a small delta package, not the whole app.
+- It installs when ntfy-bar quits, or on its next start (for example after a reboot). The tray menu then
+  shows **Restart to update to X.Y.Z**, and a notification offers **Restart now**.
+- The Start-menu entry and launch at login point at the same path before and after an update, so both
+  keep working. Updates are installed by ntfy-bar itself, so SmartScreen doesn't ask again.
+
+Other downloads on each release:
+
+| File | Use |
+|---|---|
+| `ntfy-bar-windows-win-Portable.zip` | No installer: unzip anywhere and run `ntfy-bar-windows.exe`. Updates itself too |
+| `ntfy-bar-windows-vX.Y.Z.exe` | One self-contained file (~80 MB). Does **not** update itself; it only tells you when a new release exists |
+| `SHA256SUMS` | Checksums: `Get-FileHash <file> -Algorithm SHA256` |
 
 ## Configuration
 
@@ -123,9 +141,10 @@ Windows is stricter than macOS for apps that aren't installed from the Store (un
 
 ## Uninstall
 
-Quit from the tray menu, then run `ntfy-bar-windows.exe --uninstall` (removes launch at login, the saved
-credentials and the notification registration) and delete the exe. Settings and history stay in the
-folders above until you delete them.
+Installed copy: **Settings › Apps › Installed apps › ntfy-bar › Uninstall**. Portable copy: quit from the
+tray menu, run `ntfy-bar-windows.exe --uninstall` (removes launch at login, the saved credentials and the
+notification registration), then delete the files. Either way, settings and history stay in the folders
+above until you delete them.
 
 ## Build from source
 
@@ -138,7 +157,10 @@ dotnet publish src/NtfyBar.Win -c Release -r win-x64    # → single self-contai
 
 The Windows project also builds (but doesn't run) on Linux and macOS thanks to
 `EnableWindowsTargeting`. CI builds, tests, publishes and smoke-runs the exe on `windows-latest` for every
-pull request; pushing a `vX.Y.Z` tag publishes a GitHub Release with the exe and `SHA256SUMS`.
+pull request. It also packs two Velopack versions, installs the older one silently and checks that it
+updates itself to the newer one. Pushing a `vX.Y.Z` tag builds the Velopack release (Setup, full and delta
+packages, Portable.zip), uploads it with `vpk upload github`, and attaches the single-file exe and
+`SHA256SUMS`. A `-rc` tag is published as a prerelease, which installed copies ignore.
 
 ```
 src/NtfyBar.Core/     platform-independent: models, JSON, catalog sync + reconcile, stream parser,

@@ -1,6 +1,7 @@
 using System.Runtime.InteropServices;
 using Microsoft.Toolkit.Uwp.Notifications;
 using NtfyBar.Core;
+using Velopack;
 
 namespace NtfyBar.Win;
 
@@ -15,6 +16,17 @@ internal static class Program
     [STAThread]
     private static int Main(string[] args)
     {
+        // Must run first: Velopack's install/update/uninstall hooks call the exe and exit here.
+        VelopackApp.Build()
+            .OnBeforeUninstallFastCallback(_ => CleanUpForUninstall())
+            .Run();
+
+        if (args.Contains("--version"))
+        {
+            ConsoleAttach.Attach();
+            Console.WriteLine(AppInfo.Version);
+            return 0;
+        }
         if (args.Contains("--selftest")) return SelfTest.Run(args);
         if (args.Contains("--uninstall")) return Uninstall();
 
@@ -57,13 +69,19 @@ internal static class Program
         return 0;
     }
 
-    private static int Uninstall()
+    /// <summary>Velopack uninstall (Settings › Apps) and <c>--uninstall</c>: the per-user bits outside the install folder.</summary>
+    private static void CleanUpForUninstall()
     {
-        ConsoleAttach.Attach();
-        Autostart.Set(false);
+        try { Autostart.Set(false); } catch { /* logged */ }
         Credentials.Delete(Credentials.Password);
         Credentials.Delete(Credentials.Token);
         try { ToastNotificationManagerCompat.Uninstall(); } catch (Exception e) { Console.WriteLine($"toasts: {e.Message}"); }
+    }
+
+    private static int Uninstall()
+    {
+        ConsoleAttach.Attach();
+        CleanUpForUninstall();
         Console.WriteLine("ntfy-bar: removed autostart, saved credentials and the notification registration.");
         Console.WriteLine($"Settings and history are left in {Storage.RoamingDir} and {Storage.LocalDir}.");
         return 0;

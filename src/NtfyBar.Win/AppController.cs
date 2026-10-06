@@ -170,6 +170,7 @@ internal sealed class AppController : IDisposable
     public bool AuthProblem => Status.State == ConnectionState.AuthError || Catalog.AuthError;
 
     public event Action? SignInRequested;
+    public event Action? RestartToUpdateRequested;
 
     /// <summary>Tell the user once per failure episode, with a toast that opens Sign in.</summary>
     public void ReportAuthError()
@@ -339,6 +340,9 @@ internal sealed class AppController : IDisposable
                 break;
             case ToastArgs.SignIn:
                 SignInRequested?.Invoke();
+                break;
+            case ToastArgs.RestartToUpdate:
+                RestartToUpdateRequested?.Invoke();
                 break;
             case ToastArgs.Update:
                 if (url is not null) OpenUrl(url);
