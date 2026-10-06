@@ -30,21 +30,25 @@ internal static class SelfTest
         var settings = new AppSettings { ServerUrl = "https://ntfy.example.com", Topics = reconciled.Topics, Insistent = true };
         Check("catalog reconcile", () => reconciled.Added.Single() == "demo-orders" ? "1 topic added" : throw new Exception("unexpected"));
 
-        foreach (var cls in SoundClass.All)
+        var cases = SoundClass.All.Select(c => (Name: c, Class: c, Priority: 3))
+            .Append((Name: "insistent p5", Class: SoundClass.Default, Priority: 5));
+        foreach (var c in cases)
         {
-            Check($"toast xml ({cls})", () =>
+            Check($"toast xml ({c.Name})", () =>
             {
-                var topic = reconciled.Topics[0] with { Sound = cls };
+                var topic = reconciled.Topics[0] with { Sound = c.Class };
                 var m = new NtfyMessage
                 {
-                    Id = "selftest" + cls, Topic = topic.Name, Time = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
-                    Title = "Selftest", Message = "**Sound class** " + cls, Priority = cls == "urgent" ? 5 : 3,
+                    Id = "selftest" + c.Class + c.Priority, Topic = topic.Name, Time = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
+                    Title = "Selftest", Message = "**Sound class** " + c.Class, Priority = c.Priority,
                     Click = "https://ntfy.sh",
                     Actions = new() { new NtfyAction { Action = "view", Label = "Open", Url = "https://ntfy.sh" } },
                 };
                 var xml = Toasts.Build(m, topic, settings, null, null).GetToastContent().GetContent();
                 if (!xml.Contains("<toast")) throw new Exception("no <toast> element");
-                return xml.Length + " chars, audio=" + (System.Text.RegularExpressions.Regex.Match(xml, "<audio[^>]*>").Value);
+                var toastTag = System.Text.RegularExpressions.Regex.Match(xml, "<toast[^>]*>").Value;
+                var scenario = System.Text.RegularExpressions.Regex.Match(toastTag, "scenario=\"[^\"]*\"").Value;
+                return $"{xml.Length} chars, {(scenario.Length > 0 ? scenario + ", " : "")}audio={System.Text.RegularExpressions.Regex.Match(xml, "<audio[^>]*>").Value}";
             });
         }
 
