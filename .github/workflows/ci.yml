@@ -92,6 +92,7 @@ jobs:
           Run-Exe '--selftest' | Out-Null
 
           # 3. Launch at login set from the installed copy must survive the update.
+          New-Item -Path HKCU:\Software\Microsoft\Windows\CurrentVersion\Run -Force -ErrorAction SilentlyContinue | Out-Null   # absent on fresh runners
           New-ItemProperty -Path HKCU:\Software\Microsoft\Windows\CurrentVersion\Run -Name ntfy-bar -Value "`"$exe`" --autostart" -Force | Out-Null
 
           # 4. Update from the local release folder (same code path as GitHub, other source).
