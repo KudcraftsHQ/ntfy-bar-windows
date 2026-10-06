@@ -11,6 +11,13 @@ public sealed record TokenResponse
     [JsonPropertyName("expires")] public long? Expires { get; init; }
 }
 
+public sealed record TokenRequest
+{
+    [JsonPropertyName("label")] public string Label { get; init; } = "";
+    /// <summary>Unix seconds; 0 = never expires.</summary>
+    [JsonPropertyName("expires")] public long Expires { get; init; }
+}
+
 public sealed class SignInException(string message, int status = 0) : Exception(message)
 {
     public int Status { get; } = status;
@@ -26,12 +33,14 @@ public static class NtfyApi
         return TextUtil.Truncate($"ntfy-bar-win-{clean}", 64).TrimEnd('…');
     }
 
-    /// <summary><c>POST /v1/account/token</c> with Basic auth → <c>tk_…</c> (spec §14.4).</summary>
+    /// <summary><c>POST /v1/account/token</c> with Basic auth → <c>tk_…</c> (spec §14.4).
+    /// <c>expires: 0</c> = never expires. Without it the server applies its 72 h default and the app
+    /// goes dark on day 3. The token is per device and revocable in the web app (Account › Access tokens).</summary>
     public static async Task<string> MintTokenAsync(HttpClient http, string baseUrl, string username, string password, string label, CancellationToken ct)
     {
         using var req = new HttpRequestMessage(HttpMethod.Post, $"{baseUrl.TrimEnd('/')}/v1/account/token");
         req.Headers.TryAddWithoutValidation("Authorization", StreamRules.BasicAuth(username, password));
-        req.Content = new StringContent(Json.Write(new Dictionary<string, string> { ["label"] = label }), Encoding.UTF8, "application/json");
+        req.Content = new StringContent(Json.Write(new TokenRequest { Label = label, Expires = 0 }), Encoding.UTF8, "application/json");
         HttpResponseMessage resp;
         try { resp = await http.SendAsync(req, ct).ConfigureAwait(false); }
         catch (HttpRequestException e) { throw new SignInException($"Could not reach the server: {e.InnerException?.Message ?? e.Message}"); }

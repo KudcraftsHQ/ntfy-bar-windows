@@ -82,7 +82,8 @@ internal sealed class CatalogService : IDisposable
         switch (r.Kind)
         {
             case CatalogFetchKind.Ok:
-                Apply(r.Catalog!);
+                await ApplyAsync(r.Catalog!, generation);
+                if (generation != _generation) { _again = true; return; }
                 _etag = r.ETag;
                 LastSync = DateTimeOffset.Now;
                 LastError = null;
@@ -97,6 +98,7 @@ internal sealed class CatalogService : IDisposable
                 AuthError = true;
                 LastError = "Sign in again: the server refused the saved credentials";
                 Log.Write($"catalog: auth error HTTP {r.Status}");
+                _app.ReportAuthError();
                 break;
             case CatalogFetchKind.Unavailable:
                 LastError = "This server has no topic catalog";
@@ -106,33 +108,51 @@ internal sealed class CatalogService : IDisposable
                 Log.Write($"catalog: {r.Error}");
                 break;
         }
+        if (!AuthError) _app.AuthMaybeRecovered();
         _app.NotifyChanged();
     }
 
-    private void Apply(Catalog catalog)
+    /// <summary>Backfill first, then save the topics: the save reconnects the stream, and the
+    /// replayed history of a new topic must already be marked seen (and is never notified).</summary>
+    private async Task ApplyAsync(Catalog catalog, int generation)
     {
         var before = _app.Settings;
         var result = CatalogSync.Reconcile(before.Topics, catalog);
-        var syncTopic = string.IsNullOrEmpty(catalog.SyncTopic) ? before.SyncTopic : catalog.SyncTopic;
-        if (result.Changed || syncTopic != before.SyncTopic)
+        // Take the server's sync topic as-is (empty = none), as ntfy-bar does.
+        var syncTopic = CatalogSync.SyncTopicOf(catalog);
+
+        var now = DateTimeOffset.UtcNow;
+        foreach (var topic in result.Added) _app.Store.QuietHistory(topic, now);
+        if (result.Added.Count > 0)
+        {
+            using var gate = new SemaphoreSlim(4);
+            await Task.WhenAll(result.Added.Select(async topic =>
+            {
+                await gate.WaitAsync();
+                try { await BackfillAsync(topic, before); }
+                finally { gate.Release(); }
+            }));
+            if (generation != _generation) return; // account/server changed while backfilling
+        }
+
+        if (result.Changed || syncTopic != _app.Settings.SyncTopic)
         {
             Log.Write($"catalog: v{catalog.Version} +{result.Added.Count} -{result.Removed.Count} ~{result.Updated.Count}");
-            _app.Update(s => s with { Topics = result.Topics, SyncTopic = syncTopic });
+            // Re-reconcile against the current list so a mute/enable made while backfilling isn't lost.
+            var latest = CatalogSync.Reconcile(_app.Settings.Topics, catalog);
+            _app.Update(s => s with { Topics = latest.Topics, SyncTopic = syncTopic });
         }
 
         foreach (var app in catalog.Apps)
             if (TextUtil.TryAbsoluteUri(app.Icon, out var icon) && IconRules.IsAllowedIcon(icon, before.ServerUri))
                 _ = _app.Icons.FileAsync(icon, _app.AuthorizationFor(icon), IconRules.MaxIconBytes);
-
-        foreach (var topic in result.Added) _ = BackfillAsync(topic);
     }
 
-    private async Task BackfillAsync(string topic)
+    private async Task BackfillAsync(string topic, AppSettings settings)
     {
         try
         {
-            var s = _app.Settings;
-            var messages = await CatalogSync.BackfillAsync(_app.Http, s.BaseUrl, topic, _app.Authorization, BackfillSince, CancellationToken.None);
+            var messages = await CatalogSync.BackfillAsync(_app.Http, settings.BaseUrl, topic, _app.Authorization, BackfillSince, CancellationToken.None);
             Log.Write($"catalog: backfilled {messages.Count} messages for {topic}");
             _app.IngestBackfill(messages);
         }

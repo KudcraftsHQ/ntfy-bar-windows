@@ -120,6 +120,38 @@ public class CatalogSyncTests
         Assert.Equal(new[] { "facemap-alerts", "kudtrading" }, r2.Removed);
     }
 
+    /// <summary>Shared case, mirrored in ntfy-bar's CatalogSyncTests (review finding 6): the same
+    /// settings.json must behave the same in both apps.</summary>
+    [Fact]
+    public void Parity_shared_case_with_ntfy_bar()
+    {
+        var current = new List<TopicConfig>
+        {
+            new() { Name = "mine", App = "old", AppName = "Old", AppIcon = "https://x/i.png", Sound = "alert", DisplayName = "Mine" }, // unmanaged, left the catalog
+            new() { Name = "gone", Managed = true },                                                                                   // managed, left the catalog
+            new() { Name = "kept", Managed = true, Muted = true, Enabled = false },                                                    // user state survives
+        };
+        var catalog = new Catalog
+        {
+            SyncTopic = "",
+            Apps = { new CatalogApp { Id = "kept", Name = "Kept", Icon = "", Sound = "default",
+                Topics = { new CatalogTopic { Topic = "kept", Name = "", Sound = "loud" }, new CatalogTopic { Topic = "kept-new", Name = "New", Sound = "urgent" } } } },
+        };
+        var r = CatalogSync.Reconcile(current, catalog);
+
+        Assert.Equal(new[] { "mine", "kept", "kept-new" }, r.Topics.Select(t => t.Name));
+        Assert.Equal(new TopicConfig { Name = "mine" }, r.Topics[0]);              // unmanaged: catalog fields cleared, kept
+        Assert.Equal("default", r.Topics[1].Sound);                                // unknown class normalised
+        Assert.True(r.Topics[1].Muted);
+        Assert.False(r.Topics[1].Enabled);
+        Assert.Null(r.Topics[1].AppIcon);                                          // "" = unset
+        Assert.True(r.Topics[2].IsManaged);
+        Assert.Equal("urgent", r.Topics[2].Sound);
+        Assert.Null(CatalogSync.SyncTopicOf(catalog));                             // empty sync_topic = none, taken as-is
+        Assert.Equal("st_1", CatalogSync.SyncTopicOf(catalog with { SyncTopic = "st_1" }));
+        Assert.True(SoundPlan.For(r.Topics[2].Sound, 2, false, false).Silent);   // priority 1-2 silent on catalog topics
+    }
+
     [Fact]
     public void Reconcile_is_idempotent()
     {
@@ -169,13 +201,30 @@ public class CatalogSyncTests
         Assert.Empty(h.Requests[0].Headers.IfNoneMatch);
     }
 
+    [Theory]
+    [InlineData("\"9f2c1e0ab4d7\"")]   // opaque per-user hash (CONTRACT-CHANGES)
+    [InlineData("W/\"9f2c\"")]
+    [InlineData("9f2c-unquoted")]
+    public async Task Opaque_etag_round_trips_byte_for_byte(string etag)
+    {
+        var h = new FakeHandler((_, i) => i == 0
+            ? FakeHandler.Text(HttpStatusCode.OK, Samples.CatalogJson, etag)
+            : new HttpResponseMessage(HttpStatusCode.NotModified));
+        var http = new HttpClient(h);
+        var first = await CatalogSync.FetchAsync(http, "https://n.example", "Bearer tk", null, default);
+        Assert.Equal(etag, first.ETag);
+        var second = await CatalogSync.FetchAsync(http, "https://n.example", "Bearer tk", first.ETag, default);
+        Assert.Equal(CatalogFetchKind.NotModified, second.Kind);
+        Assert.Equal(etag, h.Requests[1].Headers.GetValues("If-None-Match").Single());
+    }
+
     [Fact]
     public async Task Fetch_sends_if_none_match_and_maps_304()
     {
         var h = new FakeHandler((_, _) => new HttpResponseMessage(HttpStatusCode.NotModified));
         var r = await CatalogSync.FetchAsync(new HttpClient(h), "https://n.example", null, "\"42\"", default);
         Assert.Equal(CatalogFetchKind.NotModified, r.Kind);
-        Assert.Equal("\"42\"", h.Requests[0].Headers.IfNoneMatch.Single().ToString());
+        Assert.Equal("\"42\"", h.Requests[0].Headers.GetValues("If-None-Match").Single());
         Assert.Null(r.Catalog);
     }
 

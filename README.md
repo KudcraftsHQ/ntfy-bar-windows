@@ -50,7 +50,7 @@ Right-click the tray icon → **Settings…**
 | Setting | Notes |
 |---|---|
 | Server URL | e.g. `https://ntfy.example.com` |
-| Sign in… | Username + password → creates a per-device access token (`ntfy-bar-win-<PC name>`) and forgets the password. Revoke it in the ntfy web app under Account › Access tokens |
+| Sign in… | Username + password → creates a per-device access token (`ntfy-bar-win-<PC name>`) that **never expires**, and forgets the password. Revoke it in the ntfy web app under Account › Access tokens. If the server ever refuses it, the bell shows a slash, a notification asks you to sign in again, and the tray menu offers **Sign in again…** |
 | Username / Password / Access token | Manual alternative to Sign in. The token is sent as `Bearer` and wins over the password |
 | Sync topics from the server's catalog | On by default for every server except ntfy.sh. **Sync now** refetches immediately |
 | Topics | **On** = subscribed, **Mute** = listed but no notification. Add your own topics below the list. Catalog topics can only be turned off or muted; they disappear by themselves when your access is removed |
@@ -78,7 +78,7 @@ Windows is stricter than macOS for apps that aren't installed from the Store (un
   | `alert` | Notification.Reminder |
   | `urgent` | Notification.Looping.Alarm2 (played once); the toast stays on screen until dismissed |
 
-  With **Insistent alarm** on, priority-5 messages loop the alarm until dismissed. You can turn sound
+  Priority 1–2 messages on catalog topics are silent, as in ntfy-bar. With **Insistent alarm** on, priority-5 messages loop the alarm until dismissed. You can turn sound
   on or off for ntfy-bar in **Settings › System › Notifications › ntfy-bar**, but not pick a different
   sound.
 - **Icons**: a toast can only show a local image file, so app icons and image attachments are
@@ -95,7 +95,8 @@ Windows is stricter than macOS for apps that aren't installed from the Store (un
 - **Catalog.** `GET /v1/catalog` on launch, every 15 minutes (with `If-None-Match`), after sleep and
   network changes, on every stream reconnect, and immediately when the server posts `{"event":"sync"}`
   on your account's sync topic (which is streamed with your topics, never shown). Only a 200 response
-  changes the topic list. Topics new to this PC get the last 7 days of history, without notifications.
+  changes the topic list. Topics new to this PC get the last 7 days of history first, and that history
+  never notifies, even when the stream replays it.
 - **Notifications.** Only messages that arrive while the app runs (60 s grace) and haven't been seen
   before notify, so backlog never floods you. Muted and switched-off topics never notify.
 - **Credentials** are only sent to your ntfy server, never to third-party icon hosts.
@@ -117,7 +118,8 @@ Windows is stricter than macOS for apps that aren't installed from the Store (un
 - **"Authentication failed"** means the server returned 401 or 403. Sign in again.
 - **Check the install.** `ntfy-bar-windows.exe --selftest` from a terminal prints a short report and
   shows one test notification.
-- **Start over.** Quit, delete `%APPDATA%\ntfy-bar\settings.json`, start again.
+- **Start over.** Quit, delete `%APPDATA%\ntfy-bar\settings.json`, start again. A settings file the app
+  can't read is renamed to `settings.json.unreadable-<time>`, never overwritten.
 
 ## Uninstall
 

@@ -336,11 +336,12 @@ internal sealed partial class SettingsForm : Form
             return;
         }
         var user = _username.Text.Trim();
-        _app.Update(s => s with { ServerUrl = server, Username = user });
-        _app.UpdateCredentials(_password.Text.Length > 0 ? _password.Text : null, _token.Text.Length > 0 ? _token.Text.Trim() : null);
+        _app.Reconfigure(server, user, _password.Text.Length > 0 ? _password.Text : null, _token.Text.Length > 0 ? _token.Text.Trim() : null);
         LoadConnection();
         RefreshAll();
     }
+
+    public void OpenSignIn() => BeginInvoke(SignIn);
 
     private void SignIn()
     {

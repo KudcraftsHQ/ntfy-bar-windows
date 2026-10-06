@@ -24,6 +24,7 @@ internal sealed class TrayApp : ApplicationContext
 
         _app.Changed += Refresh;
         _app.ShowMessagesRequested += ShowMessages;
+        _app.SignInRequested += () => { ShowSettings(); _settings?.OpenSignIn(); };
         _updater.Changed += Refresh;
         Microsoft.Win32.SystemEvents.UserPreferenceChanged += OnUserPreferenceChanged;
 
@@ -44,16 +45,18 @@ internal sealed class TrayApp : ApplicationContext
         var unread = _app.Store.UnreadCount(_app.Settings);
         var size = SystemInformation.SmallIconSize.Width;
         var light = TrayIcons.TaskbarIsLight();
-        var key = (_app.Status.State, Math.Min(unread, 100), size, light);
+        // A refused catalog fetch shows the slash too, not only a refused stream.
+        var state = _app.AuthProblem ? ConnectionState.AuthError : _app.Status.State;
+        var key = (state, Math.Min(unread, 100), size, light);
         if (key != _iconKey)
         {
             _iconKey = key;
             var old = _icon;
-            _icon = TrayIcons.Render(_app.Status.State, unread, size, light);
+            _icon = TrayIcons.Render(state, unread, size, light);
             _tray.Icon = _icon;
             old?.Dispose();
         }
-        var tip = $"{AppInfo.Name} — {_app.Status.Label}";
+        var tip = $"{AppInfo.Name} — {(_app.AuthProblem ? "Sign in again" : _app.Status.Label)}";
         if (unread > 0) tip += $" — {unread} unread";
         _tray.Text = tip.Length > 127 ? tip[..127] : tip;
         _messages?.RefreshList();
@@ -70,6 +73,13 @@ internal sealed class TrayApp : ApplicationContext
         if (status.Detail is { } detail) _menu.Items.Add(new ToolStripMenuItem(detail) { Enabled = false });
         if (_app.Catalog.LastError is { } err && _app.Settings.IsCatalogEnabled)
             _menu.Items.Add(new ToolStripMenuItem(err) { Enabled = false });
+
+        if (_app.AuthProblem)
+        {
+            var signIn = new ToolStripMenuItem("Sign in again…", null, (_, _) => { ShowSettings(); _settings?.OpenSignIn(); });
+            signIn.Font = new Font(signIn.Font, FontStyle.Bold);
+            _menu.Items.Add(signIn);
+        }
 
         var open = new ToolStripMenuItem("Open messages", null, (_, _) => ShowMessages());
         open.Font = new Font(open.Font, FontStyle.Bold);

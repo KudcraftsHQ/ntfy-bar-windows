@@ -30,6 +30,18 @@ internal static class Storage
         catch (Exception e) { Log.Write($"settings: load failed: {e.Message}"); return null; }
     }
 
+    /// <summary>An unreadable settings.json is renamed, never overwritten, so it can be recovered by hand.</summary>
+    public static void SetAsideUnreadableSettings()
+    {
+        try
+        {
+            var aside = $"{SettingsPath}.unreadable-{DateTime.Now:yyyyMMdd-HHmmss}";
+            File.Move(SettingsPath, aside);
+            Log.Write($"settings: unreadable file moved to {Path.GetFileName(aside)}");
+        }
+        catch (Exception e) { Log.Write($"settings: could not move unreadable file: {e.Message}"); }
+    }
+
     public static void SaveSettings(AppSettings s)
     {
         try { Json.WriteFileAtomic(SettingsPath, Json.Write(s, indented: true)); }

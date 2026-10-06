@@ -45,6 +45,7 @@ internal sealed class AppController : IDisposable
     public AppController()
     {
         var saved = Storage.LoadSettings();
+        if (saved is null && File.Exists(Storage.SettingsPath)) Storage.SetAsideUnreadableSettings();
         _settings = saved ?? Storage.ImportCliConfig();
         if (saved is null) Storage.SaveSettings(_settings);
         _password = Credentials.Get(Credentials.Password);
@@ -91,7 +92,9 @@ internal sealed class AppController : IDisposable
         var next = change(old);
         if (ReferenceEquals(next, old)) return;
         var serverChanged = !string.Equals(next.BaseUrl, old.BaseUrl, StringComparison.OrdinalIgnoreCase);
-        if (serverChanged) next = next with { SyncTopic = null };
+        var accountChanged = serverChanged || next.Username != old.Username;
+        // The sync topic belongs to the old account: streaming it as the new one is a 403 for the whole stream.
+        if (accountChanged) next = next with { SyncTopic = null };
         _settings = next;
         Storage.SaveSettings(next);
 
@@ -99,7 +102,7 @@ internal sealed class AppController : IDisposable
             || next.Username != old.Username
             || !next.StreamTopics.SequenceEqual(old.StreamTopics);
         if (connectionChanged) ScheduleReconnect();
-        if (serverChanged || next.IsCatalogEnabled != old.IsCatalogEnabled) Catalog.Reset();
+        if (accountChanged || next.IsCatalogEnabled != old.IsCatalogEnabled) Catalog.Reset();
         Changed?.Invoke();
     }
 
@@ -109,6 +112,14 @@ internal sealed class AppController : IDisposable
     // ---- credentials ----
 
     public void UpdateCredentials(string? password, string? token)
+    {
+        StoreCredentials(password, token);
+        // New credentials may be a different account: drop its sync topic until the next 200.
+        if (_settings.SyncTopic is not null) Update(s => s with { SyncTopic = null });
+        CredentialsChanged();
+    }
+
+    private void StoreCredentials(string? password, string? token)
     {
         if (password is not null)
         {
@@ -120,19 +131,75 @@ internal sealed class AppController : IDisposable
             _token = token;
             Credentials.Set(Credentials.Token, _settings.Username, token);
         }
+    }
+
+    private void CredentialsChanged()
+    {
+        _authPrompted = false;
         RestartStream();
         Catalog.Reset();
         Changed?.Invoke();
     }
 
-    /// <summary>After sign-in: keep the token, forget the password (spec §8.4).</summary>
+    /// <summary>Settings "Save &amp; Reconnect": credentials first, then server/user, then one reconnect.</summary>
+    public void Reconfigure(string server, string username, string? password, string? token)
+    {
+        _reconnectTimer.Stop();
+        StoreCredentials(password, token);
+        var credsChanged = password is not null || token is not null;
+        Update(s => s with { ServerUrl = server, Username = username, SyncTopic = credsChanged ? null : s.SyncTopic });
+        CredentialsChanged();
+    }
+
+    /// <summary>After sign-in: keep the token, forget the password (spec §8.4). The credentials are
+    /// swapped before the server/user change, so the old token never goes to the new server.</summary>
     public void SignedIn(string server, string username, string token)
     {
-        Update(s => s with { ServerUrl = server, Username = username });
-        _password = "";
-        Credentials.Delete(Credentials.Password);
-        UpdateCredentials(null, token);
+        _reconnectTimer.Stop();
+        StoreCredentials("", token);
+        Update(s => s with { ServerUrl = server, Username = username, SyncTopic = null });
+        CredentialsChanged();
         Log.Write("signin: token stored");
+    }
+
+    // ---- auth errors ----
+
+    private bool _authPrompted;
+
+    /// <summary>The stream or the catalog was refused (401/403).</summary>
+    public bool AuthProblem => Status.State == ConnectionState.AuthError || Catalog.AuthError;
+
+    public event Action? SignInRequested;
+
+    /// <summary>Tell the user once per failure episode, with a toast that opens Sign in.</summary>
+    public void ReportAuthError()
+    {
+        Changed?.Invoke();
+        if (_authPrompted) return;
+        _authPrompted = true;
+        Log.Write("auth: credentials refused, asking to sign in again");
+        try
+        {
+            new Microsoft.Toolkit.Uwp.Notifications.ToastContentBuilder()
+                .AddArgument(ToastArgs.Action, ToastArgs.SignIn)
+                .AddText("Sign in to ntfy again")
+                .AddText($"{_settings.ServerUri?.Host ?? "The server"} refused the saved credentials, so no notifications are arriving.")
+                .AddButton(new Microsoft.Toolkit.Uwp.Notifications.ToastButton().SetContent("Sign in…").AddArgument(ToastArgs.Action, ToastArgs.SignIn))
+                .Show(t => { t.Tag = "auth"; t.Group = "ntfy-bar"; });
+        }
+        catch (Exception e) { Log.Write($"auth: toast failed: {e.Message}"); }
+    }
+
+    public void AuthMaybeRecovered()
+    {
+        if (!AuthProblem) AuthRecovered();
+    }
+
+    private void AuthRecovered()
+    {
+        if (!_authPrompted) return;
+        _authPrompted = false;
+        try { ToastNotificationManagerCompat.History.Remove("auth", "ntfy-bar"); } catch { /* not shown */ }
     }
 
     public string? Authorization => StreamRules.Authorization(_settings.Username, _password, _token);
@@ -176,7 +243,12 @@ internal sealed class AppController : IDisposable
     private void SetStatus(ConnectionStatus s)
     {
         Status = s;
-        Changed?.Invoke();
+        if (s.State == ConnectionState.AuthError) ReportAuthError();
+        else
+        {
+            if (s.State == ConnectionState.Connected && !Catalog.AuthError) AuthRecovered();
+            Changed?.Invoke();
+        }
     }
 
     private void OnPowerModeChanged(object? sender, PowerModeChangedEventArgs e)
@@ -264,6 +336,9 @@ internal sealed class AppController : IDisposable
                 break;
             case ToastArgs.Http:
                 if (id is not null && args.TryGetValue(ToastArgs.Index, out string? idxText) && int.TryParse(idxText, out var idx)) _ = RunHttpActionAsync(id, idx);
+                break;
+            case ToastArgs.SignIn:
+                SignInRequested?.Invoke();
                 break;
             case ToastArgs.Update:
                 if (url is not null) OpenUrl(url);

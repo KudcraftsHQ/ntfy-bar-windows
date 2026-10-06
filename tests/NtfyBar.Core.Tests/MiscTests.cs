@@ -58,6 +58,17 @@ public class MessageStoreTests
     }
 
     [Fact]
+    public void History_of_a_newly_added_topic_never_notifies_even_when_the_stream_replays_it()
+    {
+        var s = new MessageStore(new PersistedState(), Launch);
+        var settings = Settings with { Topics = Settings.Topics.Append(new TopicConfig { Name = "new", Managed = true }).ToList() };
+        s.QuietHistory("new", DateTimeOffset.FromUnixTimeSeconds(20_000));
+        Assert.False(s.Ingest(Samples.Msg("h1", "new", 19_990), settings).Notify);  // replayed history, after launch
+        Assert.True(s.Ingest(Samples.Msg("n1", "new", 20_001), settings).Notify);   // published after the topic appeared
+        Assert.True(s.Ingest(Samples.Msg("a1", "a", 19_990), settings).Notify);     // other topics unaffected
+    }
+
+    [Fact]
     public void Caps_entries_and_restores_from_state()
     {
         var s = new MessageStore(new PersistedState(), Launch);
@@ -92,7 +103,9 @@ public class SoundPlanTests
 {
     [Theory]
     [InlineData("silent", 5, null, false)]
-    [InlineData("default", 1, SoundPlan.DefaultSound, false)]
+    [InlineData("default", 3, SoundPlan.DefaultSound, false)]
+    [InlineData("default", 2, null, false)]   // low priority is silent on catalog topics (macOS parity)
+    [InlineData("urgent", 1, null, false)]
     [InlineData("alert", 3, SoundPlan.AlertSound, false)]
     [InlineData("urgent", 3, SoundPlan.UrgentSound, false)]
     [InlineData("bogus", 3, SoundPlan.DefaultSound, false)]
@@ -198,7 +211,8 @@ public class SignInTests
         Assert.Equal(HttpMethod.Post, req.Method);
         Assert.Equal("https://n.example/v1/account/token", req.RequestUri!.ToString());
         Assert.Equal("Basic " + Convert.ToBase64String(Encoding.UTF8.GetBytes("partner:pw")), req.Headers.GetValues("Authorization").Single());
-        Assert.Equal("""{"label":"ntfy-bar-win-DESK"}""", h.Bodies[0]);
+        // expires: 0 = never; the server's default is 72 h (review finding 1).
+        Assert.Equal("""{"label":"ntfy-bar-win-DESK","expires":0}""", h.Bodies[0]);
     }
 
     [Theory]

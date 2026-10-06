@@ -88,6 +88,9 @@ public static class CatalogSync
         DisplayName = NullIfEmpty(t.Name),
     };
 
+    /// <summary>The server's sync topic, taken as-is: empty means none (ntfy-bar parity).</summary>
+    public static string? SyncTopicOf(Catalog catalog) => string.IsNullOrWhiteSpace(catalog.SyncTopic) ? null : catalog.SyncTopic;
+
     private static string? NullIfEmpty(string? s) => string.IsNullOrWhiteSpace(s) ? null : s.Trim();
 
     /// <summary><c>GET {base}/v1/catalog</c> with <c>If-None-Match</c>. Only <see cref="CatalogFetchKind.Ok"/>
@@ -98,7 +101,8 @@ public static class CatalogSync
         {
             using var req = new HttpRequestMessage(HttpMethod.Get, $"{baseUrl.TrimEnd('/')}/v1/catalog");
             if (authorization is not null) req.Headers.TryAddWithoutValidation("Authorization", authorization);
-            if (!string.IsNullOrEmpty(etag) && EntityTagHeaderValue.TryParse(etag, out var tag)) req.Headers.IfNoneMatch.Add(tag);
+            // The ETag is an opaque hash of this user's view (CONTRACT-CHANGES): echo it byte for byte.
+            if (!string.IsNullOrEmpty(etag)) req.Headers.TryAddWithoutValidation("If-None-Match", etag);
             req.Headers.CacheControl = new CacheControlHeaderValue { NoCache = true };
             using var resp = await http.SendAsync(req, HttpCompletionOption.ResponseContentRead, ct).ConfigureAwait(false);
             var code = (int)resp.StatusCode;
@@ -115,7 +119,8 @@ public static class CatalogSync
             var body = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
             var catalog = Json.Parse<Catalog>(body);
             if (catalog is null) return new CatalogFetchResult(CatalogFetchKind.Error, Status: code, Error: "Malformed catalog JSON");
-            return new CatalogFetchResult(CatalogFetchKind.Ok, catalog, resp.Headers.ETag?.ToString(), Status: code);
+            var newTag = resp.Headers.TryGetValues("ETag", out var tags) ? tags.FirstOrDefault() : null;
+            return new CatalogFetchResult(CatalogFetchKind.Ok, catalog, newTag, Status: code);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (Exception e)

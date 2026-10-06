@@ -24,6 +24,7 @@ public sealed class MessageStore
     private readonly List<string> _seenOrder;
     private readonly HashSet<string> _seen;
     private readonly DateTimeOffset _launch;
+    private readonly Dictionary<string, long> _quietBefore = new();
 
     public string? LastMessageId { get; private set; }
     public long? LastMessageTime { get; private set; }
@@ -58,10 +59,16 @@ public sealed class MessageStore
         _entries.Insert(index < 0 ? _entries.Count : index, new Entry { Message = m, Read = false });
         if (_entries.Count > MaxEntries) _entries.RemoveRange(MaxEntries, _entries.Count - MaxEntries);
 
-        var fresh = m.Date >= _launch - NotifyGrace;
+        var fresh = m.Date >= _launch - NotifyGrace
+            && !(_quietBefore.TryGetValue(m.Topic, out var quiet) && m.Time < quiet);
         var notify = fresh && !settings.IsMuted(m.Topic) && settings.IsEnabled(m.Topic);
         return new IngestResult(IngestOutcome.Added, Notify: notify);
     }
+
+    /// <summary>A topic new to this client: its existing history (anything published before
+    /// <paramref name="addedAt"/>) is listed but never notified, even if the stream replays it.</summary>
+    public void QuietHistory(string topic, DateTimeOffset addedAt) =>
+        _quietBefore[topic] = addedAt.ToUnixTimeSeconds();
 
     private void MarkSeen(string id)
     {

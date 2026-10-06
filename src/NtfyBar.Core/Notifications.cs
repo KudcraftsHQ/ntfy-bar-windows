@@ -24,6 +24,8 @@ public sealed record SoundPlan(bool Silent, string? Src, bool Loop, ToastScenari
             cls = SoundClass.Normalize(soundClass);
 
         if (cls == SoundClass.Silent) return None;
+        // Low priority (1–2) is silent on catalog topics too, as in ntfy-bar (macOS).
+        if (soundClass is not null && priority <= 2) return None;
 
         // Insistent mode: priority 5 loops until dismissed, whatever the class.
         if (insistent && priority >= 5) return new(false, UrgentSound, true, ToastScenario.Alarm);
@@ -89,4 +91,5 @@ public static class ToastArgs
     public const string Open = "open";
     public const string Http = "http";
     public const string Update = "update";
+    public const string SignIn = "signin";
 }

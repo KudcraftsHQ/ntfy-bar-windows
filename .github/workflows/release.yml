@@ -56,6 +56,8 @@ jobs:
         shell: pwsh
         run: |
           $tag = "${{ steps.v.outputs.tag }}"
-          gh release create $tag (Get-ChildItem dist | ForEach-Object { $_.FullName }) `
+          $extra = @()
+          if ($tag -match "-") { $extra += "--prerelease" }   # v1.2.0-rc.1 must not become "latest"
+          gh release create $tag (Get-ChildItem dist | ForEach-Object { $_.FullName }) @extra `
             --title "ntfy-bar-windows $tag" `
             --notes "Unsigned build: on first run Windows SmartScreen shows 'Windows protected your PC'. Click **More info → Run anyway**. Verify the download against SHA256SUMS."
