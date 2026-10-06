@@ -1,0 +1,61 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Version from tag
+        id: v
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $version = $tag.TrimStart('v')
+          if ($version -notmatch '^\d+\.\d+\.\d+') { throw "Tag $tag is not vX.Y.Z" }
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+          "version=$version" >> $env:GITHUB_OUTPUT
+
+      - name: Test
+        run: dotnet test tests/NtfyBar.Core.Tests -c Release
+
+      - name: Publish
+        run: dotnet publish src/NtfyBar.Win -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -p:Version=${{ steps.v.outputs.version }} -o publish
+
+      - name: Smoke run (--selftest)
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath publish\ntfy-bar-windows.exe -ArgumentList '--selftest' -Wait -PassThru -NoNewWindow -RedirectStandardOutput selftest.txt
+          Get-Content selftest.txt
+          if ($p.ExitCode -ne 0) { throw "selftest exited with $($p.ExitCode)" }
+
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          $name = "ntfy-bar-windows-${{ steps.v.outputs.tag }}.exe"
+          Copy-Item publish\ntfy-bar-windows.exe "dist\$name"
+          $hash = (Get-FileHash "dist\$name" -Algorithm SHA256).Hash.ToLower()
+          "$hash  $name" | Out-File -Encoding ascii dist\SHA256SUMS
+          Get-Content dist\SHA256SUMS
+
+      - name: GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          $tag = "${{ steps.v.outputs.tag }}"
+          gh release create $tag (Get-ChildItem dist | ForEach-Object { $_.FullName }) `
+            --title "ntfy-bar-windows $tag" `
+            --notes "Unsigned build: on first run Windows SmartScreen shows 'Windows protected your PC'. Click **More info → Run anyway**. Verify the download against SHA256SUMS."
