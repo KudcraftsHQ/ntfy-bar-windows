@@ -1,5 +1,7 @@
 using Microsoft.Toolkit.Uwp.Notifications;
 using NtfyBar.Core;
+using Velopack;
+using Velopack.Sources;
 
 namespace NtfyBar.Win;
 
@@ -66,6 +68,30 @@ internal static class SelfTest
                 var history = ToastNotificationManagerCompat.History.GetHistory();
                 ToastNotificationManagerCompat.History.Remove("selftest", "selftest");
                 return $"shown (history had {history.Count})";
+            });
+        }
+
+        // CI end-to-end update test: an installed old version updates itself from a local release folder.
+        var from = Array.IndexOf(args, "--update-from");
+        if (from >= 0 && from + 1 < args.Length)
+        {
+            Check("velopack update", () =>
+            {
+                var mgr = new UpdateManager(new SimpleFileSource(new DirectoryInfo(args[from + 1])));
+                if (!mgr.IsInstalled) throw new Exception("not running from a Velopack install");
+                var info = mgr.CheckForUpdates() ?? throw new Exception($"no update found (current {mgr.CurrentVersion})");
+                mgr.DownloadUpdates(info);
+                var pending = mgr.UpdatePendingRestart ?? throw new Exception("downloaded, but no update pending");
+                mgr.WaitExitThenApplyUpdates(pending, silent: true, restart: false);
+                return $"{mgr.CurrentVersion} -> {info.TargetFullRelease.Version} downloaded via {info.DeltasToTarget.Length} delta(s), applying after exit";
+            });
+        }
+        else
+        {
+            Check("velopack", () =>
+            {
+                var mgr = new UpdateManager(new GithubSource(Updater.RepoUrl, null, false));
+                return mgr.IsInstalled ? $"installed, v{mgr.CurrentVersion}" : "portable (not installed): updates by download only";
             });
         }
 

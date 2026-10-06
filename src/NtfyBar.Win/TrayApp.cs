@@ -26,6 +26,13 @@ internal sealed class TrayApp : ApplicationContext
         _app.ShowMessagesRequested += ShowMessages;
         _app.SignInRequested += () => { ShowSettings(); _settings?.OpenSignIn(); };
         _updater.Changed += Refresh;
+        _updater.BeforeExit += () => { _tray.Visible = false; _app.SaveNow(); };
+        _app.RestartToUpdateRequested += () => _updater.RestartToApply();
+        if (_updater.IsInstalled && Autostart.IsEnabled && Autostart.PointsElsewhere)
+        {
+            // Launch at login was set up from a portable copy: point it at the installed app.
+            try { Autostart.Set(true); Log.Write("autostart: now points at the installed app"); } catch { /* logged */ }
+        }
         Microsoft.Win32.SystemEvents.UserPreferenceChanged += OnUserPreferenceChanged;
 
         Refresh();
@@ -94,15 +101,31 @@ internal sealed class TrayApp : ApplicationContext
         if (_app.Settings.IsCatalogEnabled)
             _menu.Items.Add(new ToolStripMenuItem("Sync topics now", null, (_, _) => _app.Catalog.Kick()) { Enabled = _app.Settings.HasServer });
         _menu.Items.Add(new ToolStripMenuItem("Settings…", null, (_, _) => ShowSettings()));
-        var updateLabel = _updater.Available is { } rel ? $"Update available: {rel.TagName}…" : "Check for updates…";
-        _menu.Items.Add(new ToolStripMenuItem(updateLabel, null, async (_, _) =>
-        {
-            if (_updater.Available is { } r) AppController.OpenUrl(r.HtmlUrl);
-            else await _updater.CheckAsync(manual: true);
-        }));
+        _menu.Items.Add(UpdateItem());
         _menu.Items.Add(new ToolStripSeparator());
         _menu.Items.Add(new ToolStripMenuItem("Quit ntfy-bar", null, (_, _) => Quit()));
         _menu.ResumeLayout();
+    }
+
+    private ToolStripMenuItem UpdateItem()
+    {
+        switch (_updater.Status)
+        {
+            case UpdateStatus.ReadyToRestart:
+                var restart = new ToolStripMenuItem($"Restart to update to {_updater.AvailableVersion}", null, (_, _) => _updater.RestartToApply())
+                {
+                    ToolTipText = "Otherwise it installs the next time ntfy-bar quits or starts",
+                };
+                restart.Font = new Font(restart.Font, FontStyle.Bold);
+                return restart;
+            case UpdateStatus.Downloading:
+                return new ToolStripMenuItem($"Downloading update… {_updater.Progress}%") { Enabled = false };
+            case UpdateStatus.Checking:
+                return new ToolStripMenuItem("Checking for updates…") { Enabled = false };
+        }
+        if (!_updater.IsInstalled && _updater.AvailableVersion is { } v)
+            return new ToolStripMenuItem($"Update available: v{v}…", null, (_, _) => _updater.OpenReleasePage());
+        return new ToolStripMenuItem("Check for updates…", null, async (_, _) => await _updater.CheckAsync(manual: true));
     }
 
     private void AddTopics()
@@ -182,6 +205,7 @@ internal sealed class TrayApp : ApplicationContext
     {
         _tray.Visible = false;
         _app.SaveNow();
+        _updater.ApplyOnExit();
         ExitThread();
     }
 
