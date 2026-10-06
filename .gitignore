@@ -1,0 +1,17 @@
+# Build output
+bin/
+obj/
+publish/
+artifacts/
+TestResults/
+*.user
+*.suo
+.vs/
+.vscode/
+.idea/
+
+# Local / OS
+.DS_Store
+Thumbs.db
+*.log
+.env*
