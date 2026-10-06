@@ -86,7 +86,7 @@ internal static class Toasts
         if (plan.Silent)
             b.AddAudio(new ToastAudio { Silent = true });
         else
-            b.AddAudio(new Uri(plan.Src!), loop: plan.Loop ? true : null);
+            b.AddAudio(new Uri(plan.Src!), loop: plan.Src == SoundPlan.UrgentSound ? plan.Loop : null);
 
         if (plan.Scenario != CoreScenario.Default)
         {
